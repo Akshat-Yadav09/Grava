@@ -4,7 +4,38 @@ using UnityEngine;
 
 public static class GravaSetupTool
 {
-    [MenuItem("Tools/Grava/Auto-Setup Scene (Colliders & Scripts)")]
+    [MenuItem("Tools/Grava/Create Black Hole Zone", priority = 10)]
+    [MenuItem("GameObject/2D Object/Grava/Black Hole Zone", priority = 20)]
+    public static void CreateBlackHoleZone()
+    {
+        GameObject zoneObj = new GameObject(GameObjectUtility.GetUniqueNameForSibling(null, "BlackHoleZone"));
+
+        // Position in front of the active SceneView camera if available, otherwise origin
+        Vector3 spawnPos = Vector3.zero;
+        if (SceneView.lastActiveSceneView != null)
+        {
+            spawnPos = SceneView.lastActiveSceneView.pivot;
+            spawnPos.z = 0f;
+        }
+        zoneObj.transform.position = spawnPos;
+
+        // Add BoxCollider2D configured as trigger
+        var boxCol = zoneObj.AddComponent<BoxCollider2D>();
+        boxCol.size = new Vector2(6f, 6f);
+        boxCol.isTrigger = true;
+
+        // Add BlackHoleZone component
+        zoneObj.AddComponent<BlackHoleZone>();
+
+        // Register with Unity Undo system and select the new object
+        Undo.RegisterCreatedObjectUndo(zoneObj, "Create Black Hole Zone");
+        Selection.activeGameObject = zoneObj;
+
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+        Debug.Log($"[Grava] Created '{zoneObj.name}' at position {spawnPos}. You can duplicate (Ctrl+D) or resize it anytime!");
+    }
+
+    [MenuItem("Tools/Grava/Auto-Setup Scene (Colliders & Scripts)", priority = 0)]
     public static void AutoSetupScene()
     {
         // 1. Setup PlayerObj
@@ -88,8 +119,24 @@ public static class GravaSetupTool
             Debug.Log("[Grava] Wall colliders configured with BouncyWall material.");
         }
 
+        // 5. Setup existing BlackHoleZones
+        BlackHoleZone[] zones = Object.FindObjectsByType<BlackHoleZone>(FindObjectsSortMode.None);
+        foreach (var zone in zones)
+        {
+            Undo.RegisterFullObjectHierarchyUndo(zone.gameObject, "Setup BlackHoleZone");
+            var col = zone.GetComponent<Collider2D>();
+            if (col != null)
+            {
+                col.isTrigger = true;
+            }
+        }
+        if (zones.Length > 0)
+        {
+            Debug.Log($"[Grava] Verified {zones.Length} BlackHoleZone(s) in scene.");
+        }
+
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
-        EditorUtility.DisplayDialog("Grava Setup Complete", "Scene components for PlayerObj, BlackHole, Walls, and WinPoint have been successfully configured!", "Awesome");
+        EditorUtility.DisplayDialog("Grava Setup Complete", "Scene components for PlayerObj, BlackHole, Walls, WinPoint, and BlackHoleZones have been successfully configured!", "Awesome");
     }
 }
 #endif

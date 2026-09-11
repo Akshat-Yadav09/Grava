@@ -77,7 +77,7 @@ public class PlayerBall : MonoBehaviour
         isWon = true;
 
         SetVelocity(Vector2.zero);
-        rb.isKinematic = true;
+        rb.bodyType = RigidbodyType2D.Kinematic;
         onBallWon?.Invoke();
 
         StartCoroutine(AnimateWinAbsorption(goalPosition));

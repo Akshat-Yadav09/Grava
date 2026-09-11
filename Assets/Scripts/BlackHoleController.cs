@@ -3,11 +3,21 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 #endif
 
+public enum ZoneBehavior
+{
+    [Tooltip("Black hole smoothly collapses and cuts gravity when the cursor is outside allowed zones.")]
+    DeactivateOutside = 0,
+
+    [Tooltip("Black hole clamps to the perimeter of the nearest allowed zone.")]
+    ClampToZone = 1
+}
+
 /// <summary>
 /// Controls the Black Hole:
 /// 1. Follows the mouse position with smooth inertia (no jerky snapping).
-/// 2. Applies a refined, "feel-good" gravitational force to the Player Ball.
-/// 3. Animates concentric visual rings for celestial aesthetics.
+/// 2. Respects Black Hole Zones (colliders) if any exist in the scene.
+/// 3. Applies a refined, "feel-good" gravitational force to the Player Ball.
+/// 4. Animates concentric visual rings for celestial aesthetics.
 /// </summary>
 public class BlackHoleController : MonoBehaviour
 {
@@ -24,6 +34,19 @@ public class BlackHoleController : MonoBehaviour
 
     [Tooltip("Maximum speed the black hole can move towards the cursor.")]
     [SerializeField] private float maxFollowSpeed = 60f;
+
+    [Header("Zone Restriction")]
+    [Tooltip("When enabled, black hole operation is restricted to BlackHoleZones in the scene. If no zones exist, it works everywhere.")]
+    [SerializeField] private bool useZoneRestriction = true;
+
+    [Tooltip("How the black hole behaves relative to zone boundaries.")]
+    [SerializeField] private ZoneBehavior zoneBehavior = ZoneBehavior.DeactivateOutside;
+
+    [Tooltip("If true, gravity will only pull the ball if the ball itself is also inside an active Black Hole Zone.")]
+    [SerializeField] private bool requireBallInZone = false;
+
+    [Tooltip("How fast the black hole smoothly scales/fades in and out when crossing zone boundaries.")]
+    [SerializeField] [Range(2f, 30f)] private float zoneTransitionSpeed = 14f;
 
     [Header("Feel-Good Gravity Settings")]
     [Tooltip("Base gravitational pull power (G).")]
@@ -60,6 +83,21 @@ public class BlackHoleController : MonoBehaviour
     private Vector3 currentVelocity;
     private Vector3 lastPosition;
     private Vector3 blackHoleVelocity;
+    private Vector3 initialLocalScale;
+    private float currentActivationFactor = 1f;
+    private bool isInsideZone = true;
+
+    public bool IsInZone => isInsideZone;
+    public float ActivationFactor => currentActivationFactor;
+
+    private void Awake()
+    {
+        initialLocalScale = transform.localScale;
+        if (initialLocalScale == Vector3.zero)
+        {
+            initialLocalScale = Vector3.one;
+        }
+    }
 
     private void Start()
     {
@@ -74,6 +112,23 @@ public class BlackHoleController : MonoBehaviour
         }
 
         lastPosition = transform.position;
+
+        // Check initial cursor position relative to zones
+        if (useZoneRestriction && BlackHoleZone.HasAnyZones)
+        {
+            Vector2 mouseScreen = GetMouseScreenPosition();
+            if (mainCamera != null)
+            {
+                Vector3 mouseWorld = mainCamera.ScreenToWorldPoint(new Vector3(mouseScreen.x, mouseScreen.y, -mainCamera.transform.position.z));
+                bool cursorInZone = BlackHoleZone.IsPointInsideAnyZone(mouseWorld, out _);
+                if (zoneBehavior == ZoneBehavior.DeactivateOutside && !cursorInZone)
+                {
+                    currentActivationFactor = 0f;
+                    transform.localScale = Vector3.zero;
+                    isInsideZone = false;
+                }
+            }
+        }
     }
 
     private void Update()
@@ -92,32 +147,87 @@ public class BlackHoleController : MonoBehaviour
     }
 
     /// <summary>
-    /// Smoothly glides the Black Hole toward the mouse cursor using SmoothDamp.
+    /// Smoothly glides the Black Hole toward the mouse cursor with zone-boundary handling and smooth inertia.
     /// </summary>
     private void FollowMouseWithInertia()
     {
         if (mainCamera == null) return;
 
         Vector2 mouseScreen = GetMouseScreenPosition();
-        Vector3 targetWorld = mainCamera.ScreenToWorldPoint(new Vector3(mouseScreen.x, mouseScreen.y, -mainCamera.transform.position.z));
-        targetWorld.z = 0f; // Keep on 2D plane
+        Vector3 mouseWorld = mainCamera.ScreenToWorldPoint(new Vector3(mouseScreen.x, mouseScreen.y, -mainCamera.transform.position.z));
+        mouseWorld.z = 0f; // Keep on 2D plane
 
-        transform.position = Vector3.SmoothDamp(
-            transform.position,
-            targetWorld,
-            ref currentVelocity,
-            followSmoothTime,
-            maxFollowSpeed,
-            Time.deltaTime
+        Vector3 targetWorld = mouseWorld;
+        bool hasZones = useZoneRestriction && BlackHoleZone.HasAnyZones;
+
+        if (hasZones)
+        {
+            bool cursorInZone = BlackHoleZone.IsPointInsideAnyZone(mouseWorld, out _);
+
+            if (zoneBehavior == ZoneBehavior.ClampToZone)
+            {
+                if (!cursorInZone)
+                {
+                    targetWorld = BlackHoleZone.GetClosestPointInAnyZone(mouseWorld, out _);
+                }
+                isInsideZone = true;
+            }
+            else // DeactivateOutside
+            {
+                isInsideZone = cursorInZone;
+                if (!cursorInZone)
+                {
+                    // Gently pull towards nearest zone boundary while fading out
+                    targetWorld = BlackHoleZone.GetClosestPointInAnyZone(mouseWorld, out _);
+                }
+            }
+        }
+        else
+        {
+            isInsideZone = true;
+        }
+
+        // Animate smooth scale / fade factor
+        float targetFactor = isInsideZone ? 1f : 0f;
+        currentActivationFactor = Mathf.MoveTowards(
+            currentActivationFactor,
+            targetFactor,
+            zoneTransitionSpeed * Time.deltaTime
         );
+
+        // Scale transform smoothly (collapses to 0 when outside)
+        transform.localScale = initialLocalScale * currentActivationFactor;
+
+        // Follow target position if active, transitioning, or clamped
+        if (isInsideZone || currentActivationFactor > 0.01f || zoneBehavior == ZoneBehavior.ClampToZone)
+        {
+            transform.position = Vector3.SmoothDamp(
+                transform.position,
+                targetWorld,
+                ref currentVelocity,
+                followSmoothTime,
+                maxFollowSpeed,
+                Time.deltaTime
+            );
+        }
     }
 
     /// <summary>
-    /// Calculates and applies softened, damped gravity for a great game-feel.
+    /// Calculates and applies softened, damped gravity scaled by zone activation factor.
     /// </summary>
     private void ApplyGravitationalForce()
     {
         if (targetBall == null || targetBall.IsWon) return;
+        if (currentActivationFactor <= 0.01f) return;
+
+        // If requireBallInZone is enabled, ball must also be inside a zone
+        if (useZoneRestriction && BlackHoleZone.HasAnyZones && requireBallInZone)
+        {
+            if (!BlackHoleZone.IsPointInsideAnyZone(targetBall.transform.position, out _))
+            {
+                return;
+            }
+        }
 
         Rigidbody2D ballRb = targetBall.Rigidbody;
         if (ballRb == null) return;
@@ -135,11 +245,9 @@ public class BlackHoleController : MonoBehaviour
         // 1. Smooth boundary falloff: 0 at influence edge, 1 at center
         float normalizedDist = Mathf.Clamp01(distance / influenceRadius);
         float boundaryFade = 1f - normalizedDist;
-        // Smoothstep curve for smooth fade-in
         boundaryFade = boundaryFade * boundaryFade * (3f - 2f * boundaryFade);
 
         // 2. Softened Inverse-Power Pull (Plummer potential style)
-        // Avoids infinite spikes at center while keeping strong pull nearby
         float effectiveDist = distance + softeningDistance;
         float radialMagnitude = (gravityStrength / Mathf.Pow(effectiveDist, falloffExponent)) * boundaryFade;
         Vector2 totalForce = pullDirection * radialMagnitude;
@@ -167,6 +275,9 @@ public class BlackHoleController : MonoBehaviour
             totalForce += slingshotForce;
         }
 
+        // Smoothly scale applied force by zone activation factor (prevents harsh impulses)
+        totalForce *= currentActivationFactor;
+
         // Apply force to the ball's Rigidbody2D
         ballRb.AddForce(totalForce, ForceMode2D.Force);
     }
@@ -176,13 +287,12 @@ public class BlackHoleController : MonoBehaviour
     /// </summary>
     private void AnimateVisualRings()
     {
-        if (!rotateRings) return;
+        if (!rotateRings || currentActivationFactor <= 0.001f) return;
 
         int childCount = transform.childCount;
         for (int i = 0; i < childCount; i++)
         {
             Transform child = transform.GetChild(i);
-            // Alternate rotation direction per concentric ring
             float direction = (i % 2 == 0) ? 1f : -1f;
             float speedModifier = 1f + (i * 0.35f);
             child.Rotate(0f, 0f, direction * ringRotationSpeed * speedModifier * Time.deltaTime);
